@@ -97,21 +97,24 @@ def cmd_history(args):
             units = entry.get('units', 'mg/dL')
             print(f"{timestamp} {value} {units}")
 
+
 def cmd_push(args):
     """Push a blood glucose reading to Nightscout"""
+    from datetime import datetime, timedelta, timezone
+    
     base_url = f"http://{args.host}:{args.port}"
     
-    # Calculate timestamp
+    # Calculate timestamp in UTC
     if args.minutes_ago:
-        timestamp = datetime.now() - timedelta(minutes=args.minutes_ago)
+        timestamp = datetime.now(timezone.utc) - timedelta(minutes=args.minutes_ago)
     else:
-        timestamp = datetime.now()
+        timestamp = datetime.now(timezone.utc)
     
     # Prepare entry data
     entry = {
         "type": "sgv",
         "sgv": args.value,
-        "dateString": timestamp.isoformat() + 'Z',
+        "dateString": timestamp.isoformat().replace('+00:00', 'Z'),
         "date": int(timestamp.timestamp() * 1000)  # milliseconds since epoch
     }
     
@@ -128,6 +131,7 @@ def cmd_push(args):
     except Exception as e:
         print(f"Failed to push entry: {e}", file=sys.stderr)
         sys.exit(1)
+
 
 def main():
     parser = argparse.ArgumentParser(
