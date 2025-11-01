@@ -186,18 +186,25 @@ def cmd_delete(args):
         print(f"\nDeleted {deleted} of {len(entries)} entries")
     
     else:
-        # Delete single entry by ID
-        if not args.entry_id:
-            print("Error: entry_id is required unless using --all", file=sys.stderr)
+        # Delete multiple entries by ID
+        if not args.entry_ids:
+            print("Error: at least one entry_id is required unless using --all", file=sys.stderr)
             sys.exit(1)
         
-        success = api_delete(base_url, args.api_secret, f"/api/v1/entries/{args.entry_id}")
+        deleted = 0
+        failed = 0
         
-        if success:
-            print(f"Successfully deleted entry {args.entry_id}")
-        else:
-            print(f"Failed to delete entry {args.entry_id}")
-            sys.exit(1)
+        for entry_id in args.entry_ids:
+            success = api_delete(base_url, args.api_secret, f"/api/v1/entries/{entry_id}")
+            
+            if success:
+                print(f"Deleted {entry_id}")
+                deleted += 1
+            else:
+                print(f"Failed to delete {entry_id}")
+                failed += 1
+        
+        print(f"\nDeleted {deleted} entries, {failed} failed")
 
 def main():
     parser = argparse.ArgumentParser(
@@ -245,7 +252,7 @@ def main():
     
     # delete command
     parser_delete = subparsers.add_parser('delete', help='Delete glucose entry/entries')
-    parser_delete.add_argument('entry_id', nargs='?', help='Entry ID to delete')
+    parser_delete.add_argument('entry_ids', nargs='*', help='Entry ID(s) to delete')
     parser_delete.add_argument('--all', action='store_true',
                               help='Delete ALL entries (use with caution!)')
     parser_delete.set_defaults(func=cmd_delete)
