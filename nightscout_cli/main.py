@@ -151,13 +151,13 @@ def cmd_list(args):
         print("No entries found")
         return
     
-    print(f"{'ID':<25} {'Timestamp':<30} {'Value':<10}")
-    print("-" * 65)
+    # CSV output
+    print("id,timestamp,value")
     for entry in entries:
         entry_id = entry.get('_id', 'N/A')
         timestamp = entry.get('dateString', 'N/A')
         value = entry.get('sgv', 'N/A')
-        print(f"{entry_id:<25} {timestamp:<30} {value:<10}")
+        print(f"{entry_id},{timestamp},{value}")
 
 def cmd_delete(args):
     """Delete a glucose entry by ID"""
