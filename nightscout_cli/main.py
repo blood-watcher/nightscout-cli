@@ -25,6 +25,24 @@ def api_get(base_url, api_secret, endpoint, params=None):
         print(f"Error: {e}", file=sys.stderr)
         sys.exit(1)
 
+def api_post(base_url, api_secret, endpoint, data):
+    """Make authenticated POST request to Nightscout API"""
+    headers = {
+        "API-SECRET": api_secret,
+        "Content-Type": "application/json"
+    }
+    try:
+        response = requests.post(f"{base_url}{endpoint}", headers=headers, json=data)
+        response.raise_for_status()
+        # Try to parse as JSON, but if it fails just return the text
+        try:
+            return response.json()
+        except json.JSONDecodeError:
+            return {"status": "success", "text": response.text}
+    except requests.RequestException as e:
+        print(f"Error: {e}", file=sys.stderr)
+        sys.exit(1)
+
 def cmd_get(args):
     """Get the latest blood glucose reading"""
     base_url = f"http://{args.host}:{args.port}"
@@ -79,6 +97,38 @@ def cmd_history(args):
             units = entry.get('units', 'mg/dL')
             print(f"{timestamp} {value} {units}")
 
+def cmd_push(args):
+    """Push a blood glucose reading to Nightscout"""
+    base_url = f"http://{args.host}:{args.port}"
+    
+    # Calculate timestamp
+    if args.minutes_ago:
+        timestamp = datetime.now() - timedelta(minutes=args.minutes_ago)
+    else:
+        timestamp = datetime.now()
+    
+    # Prepare entry data
+    entry = {
+        "type": "sgv",
+        "sgv": args.value,
+        "dateString": timestamp.isoformat() + 'Z',
+        "date": int(timestamp.timestamp() * 1000)  # milliseconds since epoch
+    }
+    
+    # Add optional direction if provided
+    if args.direction:
+        entry["direction"] = args.direction
+    
+    # Post the entry (as an array - Nightscout expects an array)
+    try:
+        result = api_post(base_url, args.api_secret, "/api/v1/entries", [entry])
+        print(f"Successfully pushed: {timestamp.isoformat()} {args.value} mg/dL")
+        if args.direction:
+            print(f"Direction: {args.direction}")
+    except Exception as e:
+        print(f"Failed to push entry: {e}", file=sys.stderr)
+        sys.exit(1)
+
 def main():
     parser = argparse.ArgumentParser(
         description="Nightscout CLI - Command line interface for Nightscout API"
@@ -107,6 +157,15 @@ def main():
     parser_history.add_argument('--jsonl', action='store_true',
                                 help='Output as JSONL (one JSON object per line)')
     parser_history.set_defaults(func=cmd_history)
+    
+    # push command
+    parser_push = subparsers.add_parser('push', help='Push a blood glucose reading to Nightscout')
+    parser_push.add_argument('value', type=int, help='Blood glucose value (mg/dL)')
+    parser_push.add_argument('--minutes-ago', type=int, default=0,
+                            help='Number of minutes ago for this reading (default: 0 = now)')
+    parser_push.add_argument('--direction', choices=['Flat', 'FortyFiveUp', 'FortyFiveDown', 'SingleUp', 'SingleDown', 'DoubleUp', 'DoubleDown'],
+                            help='Trend direction (optional)')
+    parser_push.set_defaults(func=cmd_push)
     
     args = parser.parse_args()
     
