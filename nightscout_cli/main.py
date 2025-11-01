@@ -7,7 +7,7 @@ import requests
 import json
 import sys
 import os
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 # Defaults - can be overridden by args or env vars
 DEFAULT_API_SECRET = os.environ.get("NIGHTSCOUT_API_SECRET", "soilentgreenandblue")
@@ -42,6 +42,17 @@ def api_post(base_url, api_secret, endpoint, data):
     except requests.RequestException as e:
         print(f"Error: {e}", file=sys.stderr)
         sys.exit(1)
+
+def api_delete(base_url, api_secret, endpoint):
+    """Make authenticated DELETE request to Nightscout API"""
+    headers = {"API-SECRET": api_secret}
+    try:
+        response = requests.delete(f"{base_url}{endpoint}", headers=headers)
+        response.raise_for_status()
+        return True
+    except requests.RequestException as e:
+        print(f"Error: {e}", file=sys.stderr)
+        return False
 
 def cmd_get(args):
     """Get the latest blood glucose reading"""
@@ -97,14 +108,11 @@ def cmd_history(args):
             units = entry.get('units', 'mg/dL')
             print(f"{timestamp} {value} {units}")
 
-
 def cmd_push(args):
     """Push a blood glucose reading to Nightscout"""
-    from datetime import datetime, timedelta, timezone
-    
     base_url = f"http://{args.host}:{args.port}"
     
-    # Calculate timestamp in UTC
+    # Calculate timestamp - use UTC
     if args.minutes_ago:
         timestamp = datetime.now(timezone.utc) - timedelta(minutes=args.minutes_ago)
     else:
@@ -114,7 +122,7 @@ def cmd_push(args):
     entry = {
         "type": "sgv",
         "sgv": args.value,
-        "dateString": timestamp.isoformat().replace('+00:00', 'Z'),
+        "dateString": timestamp.strftime('%Y-%m-%dT%H:%M:%S.%f')[:-3] + 'Z',
         "date": int(timestamp.timestamp() * 1000)  # milliseconds since epoch
     }
     
@@ -132,6 +140,64 @@ def cmd_push(args):
         print(f"Failed to push entry: {e}", file=sys.stderr)
         sys.exit(1)
 
+def cmd_list(args):
+    """List recent glucose entries with their IDs"""
+    base_url = f"http://{args.host}:{args.port}"
+    
+    params = {"count": args.count}
+    entries = api_get(base_url, args.api_secret, "/api/v1/entries.json", params=params)
+    
+    if not entries:
+        print("No entries found")
+        return
+    
+    print(f"{'ID':<25} {'Timestamp':<30} {'Value':<10}")
+    print("-" * 65)
+    for entry in entries:
+        entry_id = entry.get('_id', 'N/A')
+        timestamp = entry.get('dateString', 'N/A')
+        value = entry.get('sgv', 'N/A')
+        print(f"{entry_id:<25} {timestamp:<30} {value:<10}")
+
+def cmd_delete(args):
+    """Delete a glucose entry by ID"""
+    base_url = f"http://{args.host}:{args.port}"
+    
+    if args.all:
+        # Get all entries and delete them
+        entries = api_get(base_url, args.api_secret, "/api/v1/entries.json", params={"count": 10000})
+        
+        if not entries:
+            print("No entries to delete")
+            return
+        
+        confirm = input(f"Are you sure you want to delete {len(entries)} entries? (yes/no): ")
+        if confirm.lower() != 'yes':
+            print("Cancelled")
+            return
+        
+        deleted = 0
+        for entry in entries:
+            entry_id = entry.get('_id')
+            if api_delete(base_url, args.api_secret, f"/api/v1/entries/{entry_id}"):
+                deleted += 1
+                print(f"Deleted {entry_id}")
+        
+        print(f"\nDeleted {deleted} of {len(entries)} entries")
+    
+    else:
+        # Delete single entry by ID
+        if not args.entry_id:
+            print("Error: entry_id is required unless using --all", file=sys.stderr)
+            sys.exit(1)
+        
+        success = api_delete(base_url, args.api_secret, f"/api/v1/entries/{args.entry_id}")
+        
+        if success:
+            print(f"Successfully deleted entry {args.entry_id}")
+        else:
+            print(f"Failed to delete entry {args.entry_id}")
+            sys.exit(1)
 
 def main():
     parser = argparse.ArgumentParser(
@@ -170,6 +236,19 @@ def main():
     parser_push.add_argument('--direction', choices=['Flat', 'FortyFiveUp', 'FortyFiveDown', 'SingleUp', 'SingleDown', 'DoubleUp', 'DoubleDown'],
                             help='Trend direction (optional)')
     parser_push.set_defaults(func=cmd_push)
+    
+    # list command
+    parser_list = subparsers.add_parser('list', help='List recent glucose entries')
+    parser_list.add_argument('--count', type=int, default=20,
+                            help='Number of entries to list (default: 20)')
+    parser_list.set_defaults(func=cmd_list)
+    
+    # delete command
+    parser_delete = subparsers.add_parser('delete', help='Delete glucose entry/entries')
+    parser_delete.add_argument('entry_id', nargs='?', help='Entry ID to delete')
+    parser_delete.add_argument('--all', action='store_true',
+                              help='Delete ALL entries (use with caution!)')
+    parser_delete.set_defaults(func=cmd_delete)
     
     args = parser.parse_args()
     
