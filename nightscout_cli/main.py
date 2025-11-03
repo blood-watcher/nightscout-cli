@@ -14,15 +14,35 @@ DEFAULT_API_SECRET = os.environ.get("NIGHTSCOUT_API_SECRET", "soilentgreenandblu
 DEFAULT_HOST = os.environ.get("NIGHTSCOUT_HOST", "127.0.0.1")
 DEFAULT_PORT = os.environ.get("NIGHTSCOUT_PORT", "80")
 
-def api_get(base_url, api_secret, endpoint, params=None):
+def api_get(base_url, api_secret, endpoint, params=None, debug=False):
     """Make authenticated GET request to Nightscout API"""
     headers = {"API-SECRET": api_secret}
+    url = f"{base_url}{endpoint}"
+    
+    if debug:
+        print(f"DEBUG: GET {url}", file=sys.stderr)
+        print(f"DEBUG: Headers: {headers}", file=sys.stderr)
+        print(f"DEBUG: Params: {params}", file=sys.stderr)
+    
     try:
-        response = requests.get(f"{base_url}{endpoint}", headers=headers, params=params)
+        response = requests.get(url, headers=headers, params=params)
+        
+        if debug:
+            print(f"DEBUG: Status Code: {response.status_code}", file=sys.stderr)
+            print(f"DEBUG: Response length: {len(response.text)} bytes", file=sys.stderr)
+            print(f"DEBUG: Full URL: {response.url}", file=sys.stderr)
+        
         response.raise_for_status()
-        return response.json()
+        result = response.json()
+        
+        if debug:
+            print(f"DEBUG: Returned {len(result)} entries", file=sys.stderr)
+        
+        return result
     except requests.RequestException as e:
         print(f"Error: {e}", file=sys.stderr)
+        if debug and hasattr(e, 'response') and e.response is not None:
+            print(f"DEBUG: Response text: {e.response.text}", file=sys.stderr)
         sys.exit(1)
 
 def api_post(base_url, api_secret, endpoint, data):
@@ -57,7 +77,7 @@ def api_delete(base_url, api_secret, endpoint):
 def cmd_get(args):
     """Get the latest blood glucose reading"""
     base_url = f"http://{args.host}:{args.port}"
-    entries = api_get(base_url, args.api_secret, "/api/v1/entries.json", params={"count": 1})
+    entries = api_get(base_url, args.api_secret, "/api/v1/entries.json", params={"count": 1}, debug=args.debug)
     
     if not entries:
         print("No data available")
@@ -80,6 +100,12 @@ def cmd_history(args):
     end_time = datetime.now(timezone.utc) - timedelta(days=args.days_ago)
     start_time = end_time - timedelta(minutes=args.period)
     
+    if args.debug:
+        print(f"DEBUG: Start time: {start_time.isoformat()}", file=sys.stderr)
+        print(f"DEBUG: End time: {end_time.isoformat()}", file=sys.stderr)
+        print(f"DEBUG: Start timestamp (ms): {int(start_time.timestamp() * 1000)}", file=sys.stderr)
+        print(f"DEBUG: End timestamp (ms): {int(end_time.timestamp() * 1000)}", file=sys.stderr)
+    
     # Convert to milliseconds since epoch for the query
     params = {
         "find[date][$gte]": int(start_time.timestamp() * 1000),
@@ -87,7 +113,7 @@ def cmd_history(args):
         "count": 10000  # Large number to get all entries
     }
     
-    entries = api_get(base_url, args.api_secret, "/api/v1/entries.json", params=params)
+    entries = api_get(base_url, args.api_secret, "/api/v1/entries.json", params=params, debug=args.debug)
     
     if args.jsonl:
         # Output as JSONL (one JSON object per line)
@@ -145,7 +171,7 @@ def cmd_list(args):
     base_url = f"http://{args.host}:{args.port}"
     
     params = {"count": args.count}
-    entries = api_get(base_url, args.api_secret, "/api/v1/entries.json", params=params)
+    entries = api_get(base_url, args.api_secret, "/api/v1/entries.json", params=params, debug=args.debug)
     
     if not entries:
         print("No entries found")
@@ -165,7 +191,7 @@ def cmd_delete(args):
     
     if args.all:
         # Get all entries and delete them
-        entries = api_get(base_url, args.api_secret, "/api/v1/entries.json", params={"count": 10000})
+        entries = api_get(base_url, args.api_secret, "/api/v1/entries.json", params={"count": 10000}, debug=args.debug)
         
         if not entries:
             print("No entries to delete")
@@ -218,6 +244,8 @@ def main():
                        help=f'Nightscout port (default: {DEFAULT_PORT}, or NIGHTSCOUT_PORT env var)')
     parser.add_argument('--api-secret', default=DEFAULT_API_SECRET,
                        help='API secret (default: from NIGHTSCOUT_API_SECRET env var)')
+    parser.add_argument('--debug', action='store_true',
+                       help='Enable debug output')
     
     subparsers = parser.add_subparsers(dest='command', help='Available commands')
     
