@@ -76,14 +76,14 @@ def cmd_history(args):
     """Get historical glucose data"""
     base_url = f"http://{args.host}:{args.port}"
     
-    # Calculate time range
-    end_time = datetime.now() - timedelta(days=args.days_ago)
+    # Calculate time range using UTC
+    end_time = datetime.now(timezone.utc) - timedelta(days=args.days_ago)
     start_time = end_time - timedelta(minutes=args.period)
     
-    # Convert to milliseconds since epoch
+    # Convert to milliseconds since epoch for the query
     params = {
-        "find[dateString][$gte]": start_time.isoformat() + 'Z',
-        "find[dateString][$lte]": end_time.isoformat() + 'Z',
+        "find[date][$gte]": int(start_time.timestamp() * 1000),
+        "find[date][$lte]": int(end_time.timestamp() * 1000),
         "count": 10000  # Large number to get all entries
     }
     
