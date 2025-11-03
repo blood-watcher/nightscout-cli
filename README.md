@@ -19,7 +19,12 @@ pipx install nightscout-cli
 ```
 
 ## Usage
+Create a user token and set a secret and your nightscout host `export NIGHTSCOUT_API_SECRET=user-XXX` `NIGHTSCOUT_HOST=hsot`
+
+
 Get the last value: `nightscout get`
 Push a new value: `nightscout push 100`
 List values: `nightscout list`
 Delete an entry: `nightscout delete id`
+
+I will likely support a credential file in the not too distant history.
