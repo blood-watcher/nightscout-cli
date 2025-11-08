@@ -9,10 +9,80 @@ import sys
 import os
 from datetime import datetime, timedelta, timezone
 
-# Defaults - can be overridden by args or env vars
-DEFAULT_API_SECRET = os.environ.get("NIGHTSCOUT_API_SECRET", "soilentgreenandblue")
-DEFAULT_HOST = os.environ.get("NIGHTSCOUT_HOST", "127.0.0.1")
-DEFAULT_PORT = os.environ.get("NIGHTSCOUT_PORT", "80")
+# --- Configuration Constants and Helper Functions ---
+CONFIG_DIR = os.path.join(os.path.expanduser("~"), ".config", "nightscout-cli")
+CONFIG_FILE = os.path.join(CONFIG_DIR, "config.json")
+
+def load_config():
+    """Loads configuration from the config file."""
+    if os.path.exists(CONFIG_FILE):
+        try:
+            with open(CONFIG_FILE, 'r') as f:
+                return json.load(f)
+        except Exception as e:
+            print(f"Error loading config file {CONFIG_FILE}: {e}", file=sys.stderr)
+            sys.exit(1)
+    return {}
+
+def save_config(config_data):
+    """Saves configuration to the config file."""
+    os.makedirs(CONFIG_DIR, exist_ok=True)
+    try:
+        with open(CONFIG_FILE, 'w') as f:
+            json.dump(config_data, f, indent=4)
+        print(f"Configuration saved to {CONFIG_FILE}")
+    except Exception as e:
+        print(f"Error saving config file {CONFIG_FILE}: {e}", file=sys.stderr)
+        sys.exit(1)
+
+def get_config_or_crash():
+    """Determines final configuration, crashing if env vars and config file coexist."""
+    # 1. Load from config file
+    config_from_file = load_config()
+    config_exists = bool(config_from_file)
+
+    # 2. Check environment variables
+    env_vars_set = {
+        'host': os.environ.get("NIGHTSCOUT_HOST"),
+        'port': os.environ.get("NIGHTSCOUT_PORT"),
+        'api_secret': os.environ.get("NIGHTSCOUT_API_SECRET"),
+    }
+    env_vars_exist = any(env_vars_set.values())
+
+    # 3. Crash condition
+    if config_exists and env_vars_exist:
+        print("Fatal Error: Both configuration file and environment variables are set.", file=sys.stderr)
+        print(f"To use the config file, unset all NIGHTSCOUT_* environment variables.", file=sys.stderr)
+        print(f"Config file: {CONFIG_FILE}", file=sys.stderr)
+        print(f"Environment variables set: {', '.join([k for k, v in env_vars_set.items() if v is not None])}", file=sys.stderr)
+        sys.exit(1)
+
+    # 4. Determine final configuration defaults
+    if env_vars_exist:
+        # Prioritize environment variables if they are the only source
+        print("Using environment variables for configuration.", file=sys.stderr)
+        DEFAULT_HOST = env_vars_set['host'] or "127.0.0.1"
+        DEFAULT_PORT = env_vars_set['port'] or "80"
+        DEFAULT_API_SECRET = env_vars_set['api_secret'] or "soilentgreenandblue"
+    elif config_exists:
+        # Use config file if it's the only source
+        print(f"Using configuration from {CONFIG_FILE}.", file=sys.stderr)
+        DEFAULT_HOST = config_from_file.get('host', "127.0.0.1")
+        DEFAULT_PORT = config_from_file.get('port', "80")
+        DEFAULT_API_SECRET = config_from_file.get('api_secret', "soilentgreenandblue")
+    else:
+        # Fallback to hardcoded defaults
+        print("Using default configuration (127.0.0.1:80). Please set host/secret.", file=sys.stderr)
+        DEFAULT_HOST = "127.0.0.1"
+        DEFAULT_PORT = "80"
+        DEFAULT_API_SECRET = "soilentgreenandblue"
+    
+    return DEFAULT_HOST, DEFAULT_PORT, DEFAULT_API_SECRET
+
+# Load configuration at script startup
+DEFAULT_HOST, DEFAULT_PORT, DEFAULT_API_SECRET = get_config_or_crash()
+
+# --- API Interaction Functions (No changes needed here) ---
 
 def api_get(base_url, api_secret, endpoint, params=None, debug=False):
     """Make authenticated GET request to Nightscout API"""
@@ -21,7 +91,7 @@ def api_get(base_url, api_secret, endpoint, params=None, debug=False):
     
     if debug:
         print(f"DEBUG: GET {url}", file=sys.stderr)
-        print(f"DEBUG: Headers: {headers}", file=sys.stderr)
+        print(f"DEBUG: Headers: ***REDACTED***", file=sys.stderr) # Mask secret in debug output
         print(f"DEBUG: Params: {params}", file=sys.stderr)
     
     try:
@@ -74,6 +144,40 @@ def api_delete(base_url, api_secret, endpoint):
         print(f"Error: {e}", file=sys.stderr)
         return False
 
+# --- New `config` Command Implementation ---
+
+def cmd_config(args):
+    """Set or display configuration."""
+    current_config = load_config()
+    
+    if args.host or args.api_secret:
+        # Set command
+        if args.host:
+            current_config['host'] = args.host
+        if args.api_secret:
+            current_config['api_secret'] = args.api_secret
+
+        # Port can be included later if required, but for now we'll keep host and secret
+        if args.port:
+            current_config['port'] = args.port
+
+        save_config(current_config)
+    else:
+        # Display command (if no arguments are passed)
+        print(f"Current Config File: {CONFIG_FILE}")
+        if current_config:
+            print("-" * 30)
+            print(f"Host: {current_config.get('host', 'N/A')}")
+            print(f"Port: {current_config.get('port', 'N/A')}")
+            # Do not display the secret directly
+            secret_present = "Present" if 'api_secret' in current_config else "Not Set"
+            print(f"API Secret: {secret_present}")
+            print("-" * 30)
+        else:
+            print("Configuration file not found or is empty.")
+        
+# --- Existing Command Functions (Minor change to use default variables) ---
+
 def cmd_get(args):
     """Get the latest blood glucose reading"""
     base_url = f"http://{args.host}:{args.port}"
@@ -92,6 +196,7 @@ def cmd_get(args):
     
     print(f"{timestamp.isoformat()} {value} {units} {direction}")
 
+# ... (cmd_history, cmd_push, cmd_list, cmd_delete remain the same, relying on global defaults) ...
 def cmd_history(args):
     """Get historical glucose data"""
     base_url = f"http://{args.host}:{args.port}"
@@ -133,7 +238,7 @@ def cmd_history(args):
             value = entry.get('sgv', 'N/A')
             units = entry.get('units', 'mg/dL')
             print(f"{timestamp} {value} {units}")
-
+            
 def cmd_push(args):
     """Push a blood glucose reading to Nightscout"""
     base_url = f"http://{args.host}:{args.port}"
@@ -232,22 +337,31 @@ def cmd_delete(args):
         
         print(f"\nDeleted {deleted} entries, {failed} failed")
 
+# --- Main Parser Logic ---
+
 def main():
     parser = argparse.ArgumentParser(
         description="Nightscout CLI - Command line interface for Nightscout API"
     )
     
-    # Global arguments
+    # Global arguments - now using defaults derived from config/env check
     parser.add_argument('--host', default=DEFAULT_HOST,
-                       help=f'Nightscout host (default: {DEFAULT_HOST}, or NIGHTSCOUT_HOST env var)')
+                        help=f'Nightscout host (default: {DEFAULT_HOST}, or config file/env var)')
     parser.add_argument('--port', default=DEFAULT_PORT,
-                       help=f'Nightscout port (default: {DEFAULT_PORT}, or NIGHTSCOUT_PORT env var)')
+                        help=f'Nightscout port (default: {DEFAULT_PORT}, or config file/env var)')
     parser.add_argument('--api-secret', default=DEFAULT_API_SECRET,
-                       help='API secret (default: from NIGHTSCOUT_API_SECRET env var)')
+                        help='API secret (default: from config file/env var)')
     parser.add_argument('--debug', action='store_true',
-                       help='Enable debug output')
+                        help='Enable debug output')
     
     subparsers = parser.add_subparsers(dest='command', help='Available commands')
+    
+    # config command
+    parser_config = subparsers.add_parser('config', help='Set or display host and API secret')
+    parser_config.add_argument('--host', help='Set the Nightscout host')
+    parser_config.add_argument('--port', help='Set the Nightscout port')
+    parser_config.add_argument('--api-secret', help='Set the API secret')
+    parser_config.set_defaults(func=cmd_config)
     
     # get command
     parser_get = subparsers.add_parser('get', help='Get the latest blood glucose reading')
@@ -255,7 +369,7 @@ def main():
     
     # history command
     parser_history = subparsers.add_parser('history', help='Get historical glucose data')
-    parser_history.add_argument('--days-ago', type=int, default=0, 
+    parser_history.add_argument('--days-ago', type=int, default=0,  
                                 help='Number of days ago to fetch data for (default: 0 = today)')
     parser_history.add_argument('--period', type=int, default=1440,
                                 help='Period in minutes to fetch (default: 1440 = 24 hours)')
